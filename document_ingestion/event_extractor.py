@@ -1,20 +1,23 @@
 """Stage 3: extract date-anchored events from cleaned markdown.
 
-Uses the Anthropic Claude API when available, falling back to a
-regex-based extractor so the pipeline still runs offline.
+Uses a local Ollama text model when one is reachable, falling back to a
+regex-based extractor so the pipeline still runs with no model present.
+No cloud calls.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
+
+from . import config
+from .ollama_client import OllamaClient, OllamaError
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +100,7 @@ def _make_event_id() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Claude-backed extractor
+# Ollama-backed extractor (local)
 
 _EXTRACTION_PROMPT = """You are extracting a structured timeline from a legal/case document.
 
@@ -115,24 +118,18 @@ Document:
 JSON:"""
 
 
-def _claude_extract(markdown: str, source: str, model: str) -> list[Event]:
+def _ollama_extract(markdown: str, source: str, model: str) -> list[Event]:
+    client = OllamaClient()
     try:
-        from anthropic import Anthropic
-    except ImportError:
-        logger.warning("anthropic SDK not installed; falling back to regex extractor")
+        raw = client.chat(
+            prompt=_EXTRACTION_PROMPT.format(markdown=markdown[:60_000]),
+            model=model,
+            options={"temperature": 0},
+        )
+    except OllamaError as exc:
+        logger.warning("Ollama extract failed for %s (%s); using regex", source, exc)
         return _regex_extract(markdown, source)
 
-    client = Anthropic()
-    response = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        messages=[{
-            "role": "user",
-            "content": _EXTRACTION_PROMPT.format(markdown=markdown[:60_000]),
-        }],
-    )
-
-    raw = "".join(block.text for block in response.content if hasattr(block, "text"))
     json_text = _extract_json_block(raw)
     if not json_text:
         logger.warning("LLM returned no parseable JSON for %s", source)
@@ -177,14 +174,19 @@ def _extract_json_block(text: str) -> str | None:
 def extract_events(
     markdown_path: str | Path,
     use_llm: bool = True,
-    model: str = "claude-opus-4-7",
+    model: str | None = None,
 ) -> list[Event]:
-    """Extract events from a cleaned markdown file."""
+    """Extract events from a cleaned markdown file.
+
+    Uses the local Ollama text model when the instance is reachable;
+    otherwise falls back to the regex extractor.
+    """
     path = Path(markdown_path)
     text = path.read_text(encoding="utf-8")
 
-    if use_llm and os.getenv("ANTHROPIC_API_KEY"):
-        return _claude_extract(text, source=path.name, model=model)
+    if use_llm and config.is_available():
+        model = model or config.load_config().text_model
+        return _ollama_extract(text, source=path.name, model=model)
     return _regex_extract(text, source=path.name)
 
 

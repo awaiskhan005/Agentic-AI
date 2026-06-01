@@ -1,4 +1,4 @@
-anthropic>=0.39.0
-openai>=1.0.0
+# Local-only pipeline: no cloud SDKs. Ollama is reached over plain HTTP
+# (stdlib urllib), so it needs no Python client library.
 pdf2image>=1.17.0
 Pillow>=10.0.0

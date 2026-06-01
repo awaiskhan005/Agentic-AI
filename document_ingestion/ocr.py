@@ -1,24 +1,24 @@
-"""Stage 1: OCR PDF / DOC / DOCX files into raw Markdown using a VLM.
+"""Stage 1: OCR PDF / DOC / DOCX files into raw Markdown using a local VLM.
 
-A Vision-Language Model (default: Claude with vision) reads each rendered
-page image and emits Markdown directly. This preserves layout cues like
-headings, lists and tables better than classical OCR.
+A locally-hosted Vision-Language Model (served by Ollama) reads each
+rendered page image and emits Markdown directly. This preserves layout
+cues like headings, lists and tables better than classical OCR, and keeps
+all data on the local machine — no cloud calls.
 
-Credentials are pulled from `api_keys.get(...)` so the caller only has to
-populate `.api_keys.json` once.
+The endpoint and model are resolved from `config.load_config()`.
 """
 
 from __future__ import annotations
 
-import base64
 import io
 import logging
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Protocol
 
-from . import api_keys
+from .config import load_config
+from .ollama_client import OllamaClient
 
 logger = logging.getLogger(__name__)
 
@@ -42,72 +42,31 @@ class VLMClient(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Built-in VLM backends
+# Local VLM backend (Ollama)
 
 @dataclass
-class ClaudeVisionClient:
-    model: str = "claude-opus-4-7"
-    max_tokens: int = 4096
+class OllamaVisionClient:
+    """VLM backend served by a local Ollama instance."""
+
+    model: str | None = None
     prompt: str = _VLM_PROMPT
+    client: OllamaClient = field(default_factory=OllamaClient)
+
+    def __post_init__(self) -> None:
+        if self.model is None:
+            self.model = load_config().vision_model
 
     def transcribe(self, image_png: bytes) -> str:
-        from anthropic import Anthropic
-
-        client = Anthropic(api_key=api_keys.require("anthropic"))
-        response = client.messages.create(
+        return self.client.chat(
+            prompt=self.prompt,
             model=self.model,
-            max_tokens=self.max_tokens,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/png",
-                            "data": base64.b64encode(image_png).decode("ascii"),
-                        },
-                    },
-                    {"type": "text", "text": self.prompt},
-                ],
-            }],
-        )
-        return "".join(b.text for b in response.content if hasattr(b, "text")).strip()
-
-
-@dataclass
-class OpenAIVisionClient:
-    model: str = "gpt-4o-mini"
-    prompt: str = _VLM_PROMPT
-
-    def transcribe(self, image_png: bytes) -> str:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=api_keys.require("openai"))
-        b64 = base64.b64encode(image_png).decode("ascii")
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": self.prompt},
-                    {"type": "image_url",
-                     "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                ],
-            }],
-        )
-        return (response.choices[0].message.content or "").strip()
+            images_png=[image_png],
+        ).strip()
 
 
 def default_vlm() -> VLMClient:
-    """Pick a VLM backend based on which credential is configured."""
-    if api_keys.get("anthropic"):
-        return ClaudeVisionClient()
-    if api_keys.get("openai"):
-        return OpenAIVisionClient()
-    raise RuntimeError(
-        "No VLM credential found. Add 'anthropic' or 'openai' to .api_keys.json."
-    )
+    """Return the local Ollama vision client."""
+    return OllamaVisionClient()
 
 
 # ---------------------------------------------------------------------------

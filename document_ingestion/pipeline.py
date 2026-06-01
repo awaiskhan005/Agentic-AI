@@ -35,7 +35,7 @@ class IngestionPipeline:
         workdir: str | Path,
         db_path: str | Path | None = None,
         vlm: VLMClient | None = None,
-        llm_model: str = "claude-opus-4-7",
+        llm_model: str | None = None,
         use_llm_for_events: bool = True,
     ):
         self.workdir = Path(workdir)

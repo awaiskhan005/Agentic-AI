@@ -1,6 +1,6 @@
-# Local secrets
-.api_keys.json
-**/.api_keys.json
+# Local config (may contain a custom Ollama host)
+.docing.json
+**/.docing.json
 
 # Pipeline working dirs
 work/

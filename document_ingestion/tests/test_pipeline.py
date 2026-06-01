@@ -1,12 +1,12 @@
 """Smoke tests that exercise cleaner -> extractor -> store -> timeline.
 
-OCR and the VLM are not exercised here (no PDFs, no API key); the OCR
-module is tested separately via a fake VLMClient.
+OCR and the VLM are not exercised against a live Ollama here; the OCR
+module is tested via a fake VLMClient, and event extraction is forced
+down the regex path (use_llm=False) so tests run with no model present.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -28,8 +28,7 @@ def test_clean_markdown_removes_page_numbers_and_dehyphenates():
     assert "\n\n\n" not in out
 
 
-def test_regex_extractor_finds_dates(tmp_path: Path, monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+def test_regex_extractor_finds_dates(tmp_path: Path):
     md = tmp_path / "case.md"
     md.write_text(
         "On 2024-01-15 the court denied bail. "
@@ -92,3 +91,37 @@ def test_ocr_engine_uses_provided_vlm(tmp_path: Path):
     text = out.read_text(encoding="utf-8")
     assert "stub markdown" in text
     assert "page.png" in text
+
+
+def test_ollama_vision_client_sends_image_to_local_endpoint():
+    """OllamaVisionClient forwards the image to the local OllamaClient."""
+    from document_ingestion.ocr import OllamaVisionClient
+
+    captured = {}
+
+    class FakeOllamaClient:
+        def chat(self, prompt, model, images_png=None, options=None):
+            captured["prompt"] = prompt
+            captured["model"] = model
+            captured["n_images"] = len(images_png or [])
+            return "  transcribed page  "
+
+    vlm = OllamaVisionClient(model="llava", client=FakeOllamaClient())
+    result = vlm.transcribe(b"\x89PNG-fake")
+
+    assert result == "transcribed page"
+    assert captured["model"] == "llava"
+    assert captured["n_images"] == 1
+    assert "OCR engine" in captured["prompt"]
+
+
+def test_extract_events_falls_back_to_regex_when_ollama_down(tmp_path: Path, monkeypatch):
+    """With no reachable Ollama, use_llm=True still works via regex."""
+    from document_ingestion import config
+
+    monkeypatch.setattr(config, "is_available", lambda *a, **k: False)
+    md = tmp_path / "case.md"
+    md.write_text("Filed on 2024-05-09 in district court.\n", encoding="utf-8")
+
+    events = extract_events(md, use_llm=True)
+    assert [e.date for e in events] == ["2024-05-09"]
