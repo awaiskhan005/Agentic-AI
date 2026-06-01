@@ -1,0 +1,20 @@
+# Local secrets
+.api_keys.json
+**/.api_keys.json
+
+# Pipeline working dirs
+work/
+**/raw_md/
+**/clean_md/
+*.db
+*.db-journal
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.env
+
+# OS
+.DS_Store
